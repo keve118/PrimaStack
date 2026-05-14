@@ -1,6 +1,5 @@
 - hosts: localhost
   tasks:
-
     #################################################
     # CLEANUP / FRESH START
     #################################################
@@ -32,6 +31,33 @@
         delete_ips: true
       ignore_errors: true
 
+    - name: Get all floating IPs
+      openstack.cloud.floating_ip_info:
+      register: floating_ips
+      
+    - debug:
+        var: floating_ips
+
+    - name: Delete all floating IPs
+      command: >
+        openstack floating ip delete {{ item.id }}
+      loop: "{{ floating_ips.floating_ips }}"
+
+    - name: Get all ports
+      openstack.cloud.port_info:
+      register: ports
+      
+    - debug:
+        var: ports
+      
+    - name: Delete VM ports
+      openstack.cloud.port:
+        state: absent
+        id: "{{ item.id }}"
+      loop: "{{ ports.ports }}"
+      when: item.device_owner == "compute:nova"
+      ignore_errors: true
+
     - name: Remove router interfaces
       openstack.cloud.router:
         state: absent
@@ -39,6 +65,10 @@
         interfaces:
           - PRIMA-SUB
       ignore_errors: true
+
+    - name: Wait for router cleanup propagation
+      pause:
+        seconds: 10
 
     - name: Remove router
       openstack.cloud.router:
@@ -69,24 +99,10 @@
         state: absent
         name: PRIMA-KEY
       ignore_errors: true
-      
-    - name: Get all floating IPs
-      openstack.cloud.floating_ip_info:
-      register: floating_ips
-      
-    - debug:
-        var: floating_ips
-
-    - name: Delete all floating IPs
-      command: >
-        openstack floating ip delete {{ item.id }}
-      loop: "{{ floating_ips.floating_ips }}"
-      
-      
+         
     #################################################
     # CREATE NEW RESOURCES
     #################################################
-    
     - name: List networks
       openstack.cloud.networks_info:
       register: result
@@ -193,10 +209,6 @@
       set_fact:
         vm_ip: "{{ vm.server.addresses['PRIMA-NET'][0].addr }}"
      
-    - name: Debug VM IP
-      debug:
-        var: vm_ip
-     
     - name: Add VM1 to list
       set_fact:
         zabbix_hosts: "{{ zabbix_hosts + [ { 
@@ -223,10 +235,6 @@
     - name: Get IP
       set_fact:
         vm_ip: "{{ vm.server.addresses['PRIMA-NET'][0].addr }}"
-     
-    - name: Debug VM IP
-      debug:
-        var: vm_ip
      
     - name: Add VM2 to list
       set_fact:
@@ -268,12 +276,11 @@
           'floating_ip': floating_ip | default(''),
           'access_ip': floating_ip | default(vm_ip)
         }] }}"
-       
-       
+        
     - name: Create VM 4
       openstack.cloud.server:
         state: present
-        name: ansible-center
+        name: Ansible-Center
         image: Ubuntu 24.04
         flavor: small
         network: PRIMA-NET
@@ -284,10 +291,6 @@
         terminate_volume: true
       register: vm
   
-    - name: Debug VM structure
-      debug:
-        var: vm
- 
     - name: Get IP
       set_fact:
         vm_ip: "{{ vm.server.addresses['PRIMA-NET'][0].addr }}"
@@ -299,13 +302,7 @@
     - name: Get floating IPs
       openstack.cloud.floating_ip_info:
       register: floating_ips
-      
-    - name: Debug FLOATING IPs
-      debug:
-        var: floating_ips    
-      
-      
-      
+
     - name: Extract floating IP
       set_fact:
         floating_ip: >-
@@ -317,10 +314,6 @@
               | first
             ) | default('')
           }}
-   
-    - name: Debug FLOATING IP
-      debug:
-        var: floating_ip    
       
     - name: Add VM4 to list
       set_fact:
@@ -376,6 +369,4 @@
             ProxyJump ansible-center
             IdentityFile ~/.ssh/PRIMA-KEY
           {% endfor %}
-    
-        
-        
+   
