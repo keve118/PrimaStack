@@ -1,0 +1,381 @@
+- hosts: localhost
+  tasks:
+
+    #################################################
+    # CLEANUP / FRESH START
+    #################################################
+    - name: Delete Zabbix-One
+      openstack.cloud.server:
+        state: absent
+        name: Zabbix-One
+        delete_ips: true
+      ignore_errors: true
+      
+    - name: Delete Zabbix-Two
+      openstack.cloud.server:
+        state: absent
+        name: Zabbix-Two
+        delete_ips: true
+      ignore_errors: true
+
+    - name: Delete Zabbix-Db
+      openstack.cloud.server:
+        state: absent
+        name: Zabbix-Db
+        delete_ips: true
+      ignore_errors: true
+
+    - name: Delete Ansible-Center
+      openstack.cloud.server:
+        state: absent
+        name: Ansible-Center
+        delete_ips: true
+      ignore_errors: true
+
+    - name: Remove router interfaces
+      openstack.cloud.router:
+        state: absent
+        name: PRIMA-ROUTER
+        interfaces:
+          - PRIMA-SUB
+      ignore_errors: true
+
+    - name: Remove router
+      openstack.cloud.router:
+        state: absent
+        name: PRIMA-ROUTER
+      ignore_errors: true
+
+    - name: Remove subnet
+      openstack.cloud.subnet:
+        state: absent
+        name: PRIMA-SUB
+      ignore_errors: true
+
+    - name: Remove network
+      openstack.cloud.network:
+        state: absent
+        name: PRIMA-NET
+      ignore_errors: true
+
+    - name: Remove security group
+      openstack.cloud.security_group:
+        state: absent
+        name: PRIMA-SG
+      ignore_errors: true
+      
+    - name: Remove keypair
+      openstack.cloud.keypair:
+        state: absent
+        name: PRIMA-KEY
+      ignore_errors: true
+      
+    - name: Get all floating IPs
+      openstack.cloud.floating_ip_info:
+      register: floating_ips
+      
+    - debug:
+        var: floating_ips
+
+    - name: Delete all floating IPs
+      command: >
+        openstack floating ip delete {{ item.id }}
+      loop: "{{ floating_ips.floating_ips }}"
+      
+      
+    #################################################
+    # CREATE NEW RESOURCES
+    #################################################
+    
+    - name: List networks
+      openstack.cloud.networks_info:
+      register: result
+
+    - debug:
+        var: result
+
+    - name: Create network
+      openstack.cloud.network:
+        state: present
+        name: PRIMA-NET
+               
+    - name: Create subnet
+      openstack.cloud.subnet:
+        state: present
+        network_name: PRIMA-NET
+        name: PRIMA-SUB
+        
+        ip_version: 4
+        cidr: 10.0.1.0/27
+        enable_dhcp: true
+        dns_nameservers:
+          - 8.8.8.8
+          
+    - name: Create router
+      openstack.cloud.router:
+        state: present
+        name: PRIMA-ROUTER
+        network: External
+        
+    - name: Attach subnet to router
+      openstack.cloud.router:
+        state: present
+        name: PRIMA-ROUTER
+        interfaces:
+          - PRIMA-SUB
+         
+    - name: Create security group
+      openstack.cloud.security_group:
+        state: present
+        name: PRIMA-SG
+        
+    - name: Allow SSH
+      openstack.cloud.security_group_rule:
+        security_group: PRIMA-SG
+        protocol: tcp
+        port_range_min: 22
+        port_range_max: 22
+        remote_ip_prefix: 0.0.0.0/0
+        
+    - name: Generate SSH key locally
+      openssh_keypair:
+        path: ./PRIMA-KEY
+        type: rsa
+        size: 4096
+  
+    - name: Upload keypair to OpenStack
+      openstack.cloud.keypair:
+        state: present
+        name: PRIMA-KEY
+        public_key_file: ./PRIMA-KEY.pub
+      
+    - name: Install SSH private key
+      copy:
+        src: "{{ playbook_dir }}/PRIMA-KEY"
+        dest: "{{ lookup('env','HOME') }}/.ssh/PRIMA-KEY"
+        mode: '0600'
+      delegate_to: localhost
+ 
+    - name: Install SSH public key
+      copy:
+        src: "{{ playbook_dir }}/PRIMA-KEY.pub"
+        dest: "{{ lookup('env','HOME') }}/.ssh/PRIMA-KEY.pub"
+        mode: '0600'
+      delegate_to: localhost 
+ 
+    #################################################
+    # CREATE NEW VMS
+    #################################################
+- hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    
+    - name: Reset Zabbix host list
+      set_fact:
+        zabbix_hosts: []
+    
+    - name: Create VM 1
+      openstack.cloud.server:
+        state: present
+        name: Zabbix-One
+        image: Ubuntu 24.04
+        flavor: small
+        network: PRIMA-NET
+        key_name: PRIMA-KEY
+        security_groups:
+          - PRIMA-SG
+        auto_ip: false
+        terminate_volume: true
+      register: vm
+  
+    - name: Get IP
+      set_fact:
+        vm_ip: "{{ vm.server.addresses['PRIMA-NET'][0].addr }}"
+     
+    - name: Debug VM IP
+      debug:
+        var: vm_ip
+     
+    - name: Add VM1 to list
+      set_fact:
+        zabbix_hosts: "{{ zabbix_hosts + [ { 
+          'name': 'zabbix-one',
+          'ip': vm_ip, 
+          'floating_ip': floating_ip | default(''),
+          'access_ip': floating_ip | default(vm_ip)
+        }] }}"
+              
+    - name: Create VM 2
+      openstack.cloud.server:
+        state: present
+        name: Zabbix-Two
+        image: Ubuntu 24.04
+        flavor: small
+        network: PRIMA-NET      
+        key_name: PRIMA-KEY
+        security_groups:
+          - PRIMA-SG
+        auto_ip: false
+        terminate_volume: true
+      register: vm
+  
+    - name: Get IP
+      set_fact:
+        vm_ip: "{{ vm.server.addresses['PRIMA-NET'][0].addr }}"
+     
+    - name: Debug VM IP
+      debug:
+        var: vm_ip
+     
+    - name: Add VM2 to list
+      set_fact:
+        zabbix_hosts: "{{ zabbix_hosts + [ { 
+          'name': 'zabbix-two',
+          'ip': vm_ip, 
+          'floating_ip': floating_ip | default(''),
+          'access_ip': floating_ip | default(vm_ip)
+        }] }}"
+         
+   
+    - name: Create VM DB
+      openstack.cloud.server:
+        state: present
+        name: Zabbix-Db
+        image: Ubuntu 24.04
+        flavor: small
+        network: PRIMA-NET
+        key_name: PRIMA-KEY
+        security_groups:
+          - PRIMA-SG
+        auto_ip: false
+        terminate_volume: true
+      register: vm
+  
+    - name: Get IP
+      set_fact:
+        vm_ip: "{{ vm.server.addresses['PRIMA-NET'][0].addr }}"
+
+    - name: Debug VM IP
+      debug:
+        var: vm_ip
+     
+    - name: Add VM3 to list
+      set_fact:
+        zabbix_hosts: "{{ zabbix_hosts + [ { 
+          'name': 'zabbix-db',
+          'ip': vm_ip, 
+          'floating_ip': floating_ip | default(''),
+          'access_ip': floating_ip | default(vm_ip)
+        }] }}"
+       
+       
+    - name: Create VM 4
+      openstack.cloud.server:
+        state: present
+        name: ansible-center
+        image: Ubuntu 24.04
+        flavor: small
+        network: PRIMA-NET
+        key_name: PRIMA-KEY
+        security_groups:
+          - PRIMA-SG
+        auto_ip: true
+        terminate_volume: true
+      register: vm
+  
+    - name: Debug VM structure
+      debug:
+        var: vm
+ 
+    - name: Get IP
+      set_fact:
+        vm_ip: "{{ vm.server.addresses['PRIMA-NET'][0].addr }}"
+    
+    - name: Wait for floating IP association
+      pause:
+        seconds: 10
+        
+    - name: Get floating IPs
+      openstack.cloud.floating_ip_info:
+      register: floating_ips
+      
+    - name: Debug FLOATING IPs
+      debug:
+        var: floating_ips    
+      
+      
+      
+    - name: Extract floating IP
+      set_fact:
+        floating_ip: >-
+          {{
+            (
+              floating_ips.floating_ips
+              | selectattr('fixed_ip_address', 'equalto', vm_ip)
+              | map(attribute='floating_ip_address')
+              | first
+            ) | default('')
+          }}
+   
+    - name: Debug FLOATING IP
+      debug:
+        var: floating_ip    
+      
+    - name: Add VM4 to list
+      set_fact:
+        zabbix_hosts: "{{ zabbix_hosts + [ { 
+          'name': 'Ansible-Center',
+          'ip': vm_ip, 
+          'floating_ip': floating_ip | default(''),
+          'access_ip': floating_ip | default(vm_ip)
+        }] }}"
+  
+    - name: Build inventory content
+      set_fact:
+        inventory_content: |
+          [localhost]
+          localhost ansible_connection=local
+
+          [Zabbix]
+          {% for host in zabbix_hosts %}
+          {{ host.name }} ansible_host={{ host.access_ip }} fixed_ip={{ host.ip }}{% if host.floating_ip %} floating_ip={{ host.floating_ip }}{% endif %} ansible_user=ubuntu
+          {% endfor %}
+  
+    - name: Write inventory.ini safely
+      copy:
+        dest: "{{ playbook_dir }}/../inventory.ini"
+        content: "{{ inventory_content }}"
+        force: true
+        
+    #################################################
+    # Finalize SSH Config
+    #################################################  
+    - name: Find ansible-center
+      set_fact:
+        ansible_center: "{{ (zabbix_hosts | selectattr('name','equalto','Ansible-Center') | first) }}"
+        
+    - name: Get worker hosts
+      set_fact:
+        worker_hosts: "{{ zabbix_hosts | rejectattr('name','equalto','Ansible-Center') | list }}"    
+
+    - name: Generate SSH config
+      copy:
+        dest: "{{ lookup('env','HOME') }}/.ssh/config"
+        mode: '0600'
+        content: |
+          Host ansible-center
+            HostName {{ ansible_center.floating_ip }}
+            User ubuntu
+            IdentityFile ~/.ssh/PRIMA-KEY
+
+          {% for host in worker_hosts %}
+          Host {{ host.name | lower }}
+            HostName {{ host.ip }}
+            User ubuntu
+            ProxyJump ansible-center
+            IdentityFile ~/.ssh/PRIMA-KEY
+          {% endfor %}
+    
+        
+        

@@ -1,0 +1,9 @@
+openrc.sh
+PRIMA-KEY-PRIVATE.pem
+PRIMA-KEY-PUBLIC.pub
+Host bastionNSO
+Deploy/openrc.sh
+Deploy/ansible/playbooks/PRIMA-KEY
+Deploy/ansible/playbooks/PRIMA-KEY.pub
+
+
