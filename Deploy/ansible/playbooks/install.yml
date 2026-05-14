@@ -318,7 +318,7 @@
     - name: Add VM4 to list
       set_fact:
         zabbix_hosts: "{{ zabbix_hosts + [ { 
-          'name': 'Ansible-Center',
+          'name': 'ansible-center',
           'ip': vm_ip, 
           'floating_ip': floating_ip | default(''),
           'access_ip': floating_ip | default(vm_ip)
@@ -331,9 +331,18 @@
           localhost ansible_connection=local
 
           [Zabbix]
-          {% for host in zabbix_hosts %}
+          {% for host in zabbix_hosts if host.name != 'ansible-center' %}
+          {{ host.name }} ansible_host={{ host.access_ip }} fixed_ip={{ host.ip }}{% if host.floating_ip %} floating_ip={{ host.floating_ip }}{% endif %} ansible_user=ubuntu ansible_ssh_common_args='-o ProxyJump=ansible-center'
+          {% endfor %}
+          
+          [Zabbix:vars]
+          ansible_ssh_private_key_file=~/.ssh/ansible
+          
+          [ansible_center]
+          {% for host in zabbix_hosts if host.name == 'ansible-center' %}
           {{ host.name }} ansible_host={{ host.access_ip }} fixed_ip={{ host.ip }}{% if host.floating_ip %} floating_ip={{ host.floating_ip }}{% endif %} ansible_user=ubuntu
           {% endfor %}
+          
   
     - name: Write inventory.ini safely
       copy:
@@ -346,11 +355,11 @@
     #################################################  
     - name: Find ansible-center
       set_fact:
-        ansible_center: "{{ (zabbix_hosts | selectattr('name','equalto','Ansible-Center') | first) }}"
+        ansible_center: "{{ (zabbix_hosts | selectattr('name','equalto','ansible-center') | first) }}"
         
     - name: Get worker hosts
       set_fact:
-        worker_hosts: "{{ zabbix_hosts | rejectattr('name','equalto','Ansible-Center') | list }}"    
+        worker_hosts: "{{ zabbix_hosts | rejectattr('name','equalto','ansible-center') | list }}"    
 
     - name: Generate SSH config
       copy:

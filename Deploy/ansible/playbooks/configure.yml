@@ -1,0 +1,253 @@
+#################################################
+# SETUP Ansible Center
+################################################# 
+- hosts: ansible_center
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: true
+
+    - name: Install required packages
+      apt:
+        name:
+          - python3
+          - python3-pip
+          - python3-venv
+          - git
+          - ansible
+        state: present
+
+    - name: Check python version
+      command: python3 --version
+      register: pyver
+
+    - debug:
+        var: pyver.stdout
+
+    - name: Create Ansible directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - /home/ubuntu/ansible
+        - /home/ubuntu/ansible/playbooks
+        - /home/ubuntu/ansible/inventory
+        - /home/ubuntu/ansible/roles
+        - /home/ubuntu/ansible/group_vars
+        - /home/ubuntu/ansible/host_vars
+        - /home/ubuntu/ansible/logs
+
+    - name: Copy SSH private key
+      copy:
+        src: "{{ playbook_dir }}/PRIMA-KEY"
+        dest: /home/ubuntu/.ssh/ansible
+        owner: ubuntu
+        group: ubuntu
+        mode: '0600'
+
+    - name: Generate SSH config on ansible-center
+      copy:
+        dest: /home/ubuntu/.ssh/config
+        owner: ubuntu
+        group: ubuntu
+        mode: '0600'
+        content: |
+          {% for host in groups['Zabbix'] %}
+          Host {{ host }}
+            HostName {{ hostvars[host].fixed_ip }}
+            User ubuntu
+            IdentityFile ~/.ssh/ansible
+          {% endfor %}
+          
+#################################################
+# SETUP Zabbix-Db
+#################################################      
+- hosts: zabbix-db
+  become: true
+  gather_facts: true       
+ 
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: true
+
+    - name: Install required packages
+      apt:
+        name:
+          - python3
+          - python3-pip
+          - python3-venv
+          - git
+          - ansible
+        state: present
+
+    - name: Check python version
+      command: python3 --version
+      register: pyver
+
+    - debug:
+        var: pyver.stdout
+
+    - name: Create Ansible directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - /home/ubuntu/ansible
+        - /home/ubuntu/ansible/playbooks
+        - /home/ubuntu/ansible/inventory
+        - /home/ubuntu/ansible/roles
+        - /home/ubuntu/ansible/group_vars
+        - /home/ubuntu/ansible/host_vars
+        - /home/ubuntu/ansible/logs
+
+    - name: Copy SSH private key
+      copy:
+        src: "{{ playbook_dir }}/PRIMA-KEY"
+        dest: /home/ubuntu/.ssh/ansible
+        owner: ubuntu
+        group: ubuntu
+        mode: '0600'
+
+    - name: Generate SSH config on Zabbix-Db
+      copy:
+        dest: /home/ubuntu/.ssh/config
+        owner: ubuntu
+        group: ubuntu
+        mode: '0600'
+        content: |
+          {% for host in groups['Zabbix'] %}
+          Host {{ host }}
+            HostName {{ hostvars[host].fixed_ip }}
+            User ubuntu
+            IdentityFile ~/.ssh/ansible
+          {% endfor %}
+          
+    - name: Download MariaDB repo setup
+      get_url:
+        url: https://downloads.mariadb.com/MariaDB/mariadb_repo_setup
+        dest: /tmp/mariadb_repo_setup
+        mode: '0755'  
+
+    - name: Run MariaDB repo setup
+      command: /tmp/mariadb_repo_setup
+      args:
+        creates: /etc/apt/sources.list.d/mariadb.list
+        
+    - name: Update apt cache
+      apt:
+        update_cache: true
+        
+    - name: Install MariaDB server
+      apt:
+        name: mariadb-server
+        state: present
+
+    - name: Enable MariaDB service
+      systemd:
+        name: mariadb
+        enabled: true
+
+    - name: Start MariaDB service
+      systemd:
+        name: mariadb
+        state: started
+
+    - name: Run mariadb-secure-installation
+      expect:
+        command: mariadb-secure-installation
+        responses:
+          'Enter current password for root.*': ''
+          'Switch to unix_socket authentication.*': 'Y'
+          'Change the root password.*': 'n'
+          'Remove anonymous users.*': 'n'
+          'Disallow root login remotely.*': 'n'
+          'Remove test database and access to it.*': 'n'
+          'Reload privilege tables now.*': 'Y'
+        timeout: 60
+     
+    - name: Install MariaDB Python driver
+      apt:
+        name: python3-pymysql
+        state: present   
+
+    - name: Create Zabbix database
+      community.mysql.mysql_db:
+        name: zabbix
+        state: present
+        encoding: utf8mb4
+        collation: utf8mb4_bin
+        login_unix_socket: /run/mysqld/mysqld.sock
+        
+    - name: Create Zabbix DB user
+      community.mysql.mysql_user:
+        name: zabbix
+        password: password
+        host: "10.0.1.%"
+        priv: "zabbix.*:ALL"
+        state: present
+        login_unix_socket: /run/mysqld/mysqld.sock
+
+    - name: Enable function creators
+      community.mysql.mysql_variables:
+        variable: log_bin_trust_function_creators
+        value: 1
+        login_unix_socket: /run/mysqld/mysqld.sock
+
+        
+    - name: Download Zabbix repository package
+      get_url:
+        url: https://repo.zabbix.com/zabbix/7.0/ubuntu/pool/main/z/zabbix-release/zabbix-release_7.0-1+ubuntu24.04_all.deb
+        dest: /tmp/zabbix-release.deb
+        
+    - name: Install Zabbix repository package
+      apt:
+        deb: /tmp/zabbix-release.deb
+
+    - name: Update apt cache after adding Zabbix repo
+      apt:
+        update_cache: true   
+  
+    - name: Install Zabbix SQL scripts
+      apt:
+        name: zabbix-sql-scripts
+        state: present  
+  
+    - name: Import Zabbix schema
+      shell: |
+        zcat /usr/share/zabbix-sql-scripts/mysql/server.sql.gz | mariadb zabbix
+      args:
+        creates: /var/lib/mysql/zabbix/zabbix.frm
+        
+    - name: Disable function creators
+      community.mysql.mysql_variables:
+        variable: log_bin_trust_function_creators
+        value: 0
+        login_unix_socket: /run/mysqld/mysqld.sock
+    
+    - name: Allow remote MariaDB connections
+      lineinfile:
+        path: /etc/mysql/mariadb.conf.d/50-server.cnf
+        regexp: '^bind-address'
+        line: 'bind-address = 0.0.0.0'
+      notify: Restart MariaDB
+ 
+#################################################
+# SETUP Zabbix-One (TODO)
+#################################################   
+ 
+ 
+#################################################
+# HANDLERS
+################################################# 
+  handlers:
+  
+    - name: Restart MariaDB
+      systemd:
+        name: mariadb
+        state: restarted
