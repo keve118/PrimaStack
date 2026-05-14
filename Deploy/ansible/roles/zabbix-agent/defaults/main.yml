@@ -1,0 +1,3 @@
+---
+zabbix_server: "zabbix-one"
+zabbix_agent_package: "zabbix-agent"
