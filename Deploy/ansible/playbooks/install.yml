@@ -152,7 +152,21 @@
         port_range_min: 22
         port_range_max: 22
         remote_ip_prefix: 0.0.0.0/0
+       
+    - name: Allow all TCP within security group
+      openstack.cloud.security_group_rule:
+        security_group: PRIMA-SG
+        protocol: tcp
+        #port_range_min: 3306
+        #port_range_max: 3306
+        remote_group: PRIMA-SG
         
+    - name: Allow all ICMP within security group
+      openstack.cloud.security_group_rule:
+        security_group: PRIMA-SG
+        protocol: icmp
+        remote_group: PRIMA-SG   
+
     - name: Generate SSH key locally
       openssh_keypair:
         path: ./PRIMA-KEY
@@ -168,14 +182,14 @@
     - name: Install SSH private key
       copy:
         src: "{{ playbook_dir }}/PRIMA-KEY"
-        dest: "{{ lookup('env','HOME') }}/.ssh/PRIMA-KEY"
+        dest: "{{ lookup('env','HOME') }}/.ssh/ansible"
         mode: '0600'
       delegate_to: localhost
  
     - name: Install SSH public key
       copy:
         src: "{{ playbook_dir }}/PRIMA-KEY.pub"
-        dest: "{{ lookup('env','HOME') }}/.ssh/PRIMA-KEY.pub"
+        dest: "{{ lookup('env','HOME') }}/.ssh/ansible.pub"
         mode: '0600'
       delegate_to: localhost 
  
@@ -318,12 +332,22 @@
     - name: Add VM4 to list
       set_fact:
         zabbix_hosts: "{{ zabbix_hosts + [ { 
-          'name': 'Ansible-Center',
+          'name': 'ansible-center',
           'ip': vm_ip, 
           'floating_ip': floating_ip | default(''),
           'access_ip': floating_ip | default(vm_ip)
         }] }}"
-  
+ 
+    - name: Extract ansible-center floating IP
+      set_fact:
+        ansible_center_floating_ip: >-
+          {{
+            zabbix_hosts
+            | selectattr('name', 'equalto', 'ansible-center')
+            | map(attribute='floating_ip')
+            | first
+          }}
+ 
     - name: Build inventory content
       set_fact:
         inventory_content: |
@@ -331,9 +355,22 @@
           localhost ansible_connection=local
 
           [Zabbix]
-          {% for host in zabbix_hosts %}
+          {% for host in zabbix_hosts if host.name != 'ansible-center' %}
+          {{ host.name }} ansible_host={{ host.access_ip }} fixed_ip={{ host.ip }}
+          {% endfor %}
+          
+          [Zabbix:vars]
+          ansible_user=ubuntu
+          ansible_ssh_private_key_file=~/.ssh/ansible
+          ansible_ssh_common_args='-o ProxyJump=ubuntu@{{ ansible_center_floating_ip }} -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null'
+          
+          [ansible_center]
+          {% for host in zabbix_hosts if host.name == 'ansible-center' %}
           {{ host.name }} ansible_host={{ host.access_ip }} fixed_ip={{ host.ip }}{% if host.floating_ip %} floating_ip={{ host.floating_ip }}{% endif %} ansible_user=ubuntu
           {% endfor %}
+          
+          [all:vars]
+          ansible_ssh_common_args='-o StrictHostKeyChecking=accept-new'
   
     - name: Write inventory.ini safely
       copy:
@@ -342,31 +379,31 @@
         force: true
         
     #################################################
-    # Finalize SSH Config
+    # Create SSH Config
     #################################################  
     - name: Find ansible-center
       set_fact:
-        ansible_center: "{{ (zabbix_hosts | selectattr('name','equalto','Ansible-Center') | first) }}"
+        ansible_center: "{{ (zabbix_hosts | selectattr('name','equalto','ansible-center') | first) }}"
         
     - name: Get worker hosts
       set_fact:
-        worker_hosts: "{{ zabbix_hosts | rejectattr('name','equalto','Ansible-Center') | list }}"    
+        worker_hosts: "{{ zabbix_hosts | rejectattr('name','equalto','ansible-center') | list }}"    
 
     - name: Generate SSH config
       copy:
-        dest: "{{ lookup('env','HOME') }}/.ssh/config"
+        dest: "{{ playbook_dir }}/../ssh_config_copy"
         mode: '0600'
         content: |
           Host ansible-center
             HostName {{ ansible_center.floating_ip }}
             User ubuntu
-            IdentityFile ~/.ssh/PRIMA-KEY
+            IdentityFile ~/.ssh/ansible
 
           {% for host in worker_hosts %}
           Host {{ host.name | lower }}
             HostName {{ host.ip }}
             User ubuntu
             ProxyJump ansible-center
-            IdentityFile ~/.ssh/PRIMA-KEY
+            IdentityFile ~/.ssh/ansible
+            
           {% endfor %}
-   
