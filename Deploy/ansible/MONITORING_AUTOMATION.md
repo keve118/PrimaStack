@@ -100,6 +100,52 @@ Expected result:
 ```text
 playbook: playbooks/monitored_hosts.yml
 ```
+## Monitoring Capabilities
+
+## What Is Being Monitored
+
+The monitored Linux hosts are intended to provide operational visibility through Zabbix agents.
+
+The monitoring system is designed to monitor:
+
+- CPU utilization
+- Memory usage
+- Disk usage
+- Host availability
+- Network reachability
+- Zabbix-agent service availability
+
+## Monitoring Workflow
+
+1. The monitored hosts are defined in the Ansible inventory.
+2. The `monitored_hosts.yml` playbook targets the `monitored_linux` group.
+3. The `zabbix-agent` role installs and configures the Zabbix agent.
+4. The configuration template automatically configures:
+   - Zabbix server address
+   - Active server address
+   - Hostname
+5. The Zabbix server can collect monitoring metrics from the hosts.
+
+## Monitoring Validation
+
+### SSH Reachability
+
+```bash
+ansible -i inventory/production/hosts.yml all -m ping
+```
+
+Purpose:
+- verifies Ansible connectivity
+- validates SSH access
+- confirms inventory correctness
+
+### Future Validation
+
+After full deployment, validation can also be performed through:
+- Zabbix Web UI
+- host availability status
+- agent availability status
+- collected performance metrics
 
 ## Current Status
 
