@@ -105,29 +105,7 @@
         - /home/ubuntu/ansible/group_vars
         - /home/ubuntu/ansible/host_vars
         - /home/ubuntu/ansible/logs
-
-    - name: Copy SSH private key
-      copy:
-        src: "{{ playbook_dir }}/PRIMA-KEY"
-        dest: /home/ubuntu/.ssh/ansible
-        owner: ubuntu
-        group: ubuntu
-        mode: '0600'
-
-    - name: Generate SSH config on Zabbix-Db
-      copy:
-        dest: /home/ubuntu/.ssh/config
-        owner: ubuntu
-        group: ubuntu
-        mode: '0600'
-        content: |
-          {% for host in groups['Zabbix'] %}
-          Host {{ host }}
-            HostName {{ hostvars[host].fixed_ip }}
-            User ubuntu
-            IdentityFile ~/.ssh/ansible
-          {% endfor %}
-          
+        
     - name: Download MariaDB repo setup
       get_url:
         url: https://downloads.mariadb.com/MariaDB/mariadb_repo_setup
@@ -187,7 +165,7 @@
     - name: Create Zabbix DB user
       community.mysql.mysql_user:
         name: zabbix
-        password: password
+        password: "{{ ZBX_DB_PASSWORD }}"
         host: "10.0.1.%"
         priv: "zabbix.*:ALL"
         state: present
@@ -217,14 +195,23 @@
       apt:
         name: zabbix-sql-scripts
         state: present  
+ 
+    - name: Check if Zabbix DB is already initialized
+      community.mysql.mysql_query:
+        login_db: zabbix
+        query: "SHOW TABLES LIKE 'role';"
+        login_unix_socket: /run/mysqld/mysqld.sock
+      register: zbx_tables
+      ignore_errors: true
   
-    - name: Import Zabbix schema
+    - name: Import Zabbix schema - Only first run
       shell: |
         zcat /usr/share/zabbix-sql-scripts/mysql/server.sql.gz | mariadb zabbix
+      when: zbx_tables.rowcount[0] == 0
       args:
         creates: /var/lib/mysql/zabbix/zabbix.frm
         
-    - name: Disable function creators
+    - name: Disable function creatorsEnable and start zabbix-agent
       community.mysql.mysql_variables:
         variable: log_bin_trust_function_creators
         value: 0
@@ -235,15 +222,153 @@
         path: /etc/mysql/mariadb.conf.d/50-server.cnf
         regexp: '^bind-address'
         line: 'bind-address = 0.0.0.0'
-      notify: Restart MariaDB
- 
+
+    - name: Restart MariaDB
+      systemd:
+        name: mariadb
+        state: restarted
+
 #################################################
-# SETUP Zabbix-One (TODO)
+# SETUP Zabbix-One
 #################################################   
+- hosts: zabbix-one
+  become: true
+  gather_facts: true       
  
- 
+  tasks:
+    - name: Download Zabbix repository package
+      get_url:
+        url: https://repo.zabbix.com/zabbix/7.0/ubuntu/pool/main/z/zabbix-release/zabbix-release_7.0-1+ubuntu24.04_all.deb
+        dest: /tmp/zabbix-release.deb
+        
+    - name: Install Zabbix repository package
+      apt:
+        deb: /tmp/zabbix-release.deb
+
+    - name: Update apt cache after adding Zabbix repo
+      apt:
+        update_cache: true   
+  
+    - name: Install Zabbix frontend + nginx + PHP + Agent
+      apt:
+        name:
+          - zabbix-sql-scripts
+          - zabbix-server-mysql
+          - nginx
+          - zabbix-frontend-php
+          - zabbix-nginx-conf
+          - php8.3-fpm
+          - zabbix-agent
+        state: present
+        update_cache: true
+        
+    - name: Configure HA node settings
+      blockinfile:
+        path: /etc/zabbix/zabbix_server.conf
+        marker: "# {mark} ANSIBLE ZABBIX HA and DB CONFIG"
+        block: |
+          DBHost={{ hostvars['zabbix-db'].fixed_ip }}
+          DBPassword={{ ZBX_DB_PASSWORD }}
+          HANodeName={{ inventory_hostname }}
+          NodeAddress={{ ansible_host }}
+
+    - name: Enable Zabbix server
+      systemd:
+        name: zabbix-server
+        enabled: true
+        state: started
+        
+    - name: Install keepalived
+      apt:
+        name: keepalived
+        state: present
+        update_cache: true   
+        
+    - name: Deploy keepalived config
+      template:
+        src:  ../templates/keepalived.conf.j2
+        dest: /etc/keepalived/keepalived.conf
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Restart keepalived
+        
+    - name: Enable and start keepalived
+      systemd:
+        name: keepalived
+        enabled: true
+        state: started
+        
+    - name: Deploy Zabbix nginx config
+      template:
+        src: ../templates/nginx.conf.j2
+        dest: /etc/zabbix/nginx.conf
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Restart nginx
+
+    - name: Set fastcgi socket
+      lineinfile:
+        path: /etc/zabbix/nginx.conf
+        regexp: 'fastcgi_pass'
+        line: '        fastcgi_pass unix:/run/php/php8.3-fpm.sock;'
+
+    - name: Disable default nginx site
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+
+    - name: Enable services
+      systemd:
+        name: "{{ item }}"
+        enabled: true
+      loop:
+        - nginx
+        - php8.3-fpm
+        
+    - name: Start services
+      systemd:
+        name: "{{ item }}"
+        state: started
+      loop:
+        - php8.3-fpm
+        - nginx
+        
+    - name: Start services
+      systemd:
+        name: "{{ item }}"
+        state: started
+      loop:
+        - php8.3-fpm
+        - nginx
+      notify:
+        - Restart keepalived
+            
+    - name: Configure Zabbix frontend PHP config
+      template:
+        src: ../templates/nginx_web.j2
+        dest: /etc/zabbix/web/zabbix.conf.php
+        owner: root
+        group: root
+        mode: '0644'
+      notify:
+        - Restart zabbix-server
+        - Restart nginx
+        - Restart php-fpm
+    
+    - name: Deploy Zabbix agent config
+      template:
+        src: ../templates/zabbix_agentd.conf.j2
+        dest: /etc/zabbix/zabbix_agentd.conf
+        owner: root
+        group: root
+        mode: '0644'
+      notify:
+        - Enable and start zabbix-agent
+    
 #################################################
-# HANDLERS
+# HANDLERS Zabbix-One
 ################################################# 
   handlers:
   
@@ -251,3 +376,197 @@
       systemd:
         name: mariadb
         state: restarted
+        
+    - name: Restart keepalived
+      systemd:
+        name: keepalived
+        state: restarted
+        
+    - name: Restart nginx
+      systemd:
+        name: nginx
+        state: restarted
+        
+    - name: Restart php-fpm
+      systemd:
+        name: php8.3-fpm
+        state: restarted
+        
+    - name: Restart zabbix-server
+      systemd:
+        name: zabbix-server
+        state: restarted
+        
+    - name:  Enable and start zabbix-agent
+      systemd:
+        name: zabbix-agent
+        enabled: true
+        state: started
+        
+#################################################
+# SETUP Zabbix-Two
+#################################################   
+- hosts: zabbix-two
+  become: true
+  gather_facts: true       
+ 
+  tasks:
+    - name: Download Zabbix repository package
+      get_url:
+        url: https://repo.zabbix.com/zabbix/7.0/ubuntu/pool/main/z/zabbix-release/zabbix-release_7.0-1+ubuntu24.04_all.deb
+        dest: /tmp/zabbix-release.deb
+        
+    - name: Install Zabbix repository package
+      apt:
+        deb: /tmp/zabbix-release.deb
+
+    - name: Update apt cache after adding Zabbix repo
+      apt:
+        update_cache: true   
+  
+    - name: Install Zabbix frontend + nginx + PHP + Agent
+      apt:
+        name:
+          - zabbix-sql-scripts
+          - zabbix-server-mysql
+          - nginx
+          - zabbix-frontend-php
+          - zabbix-nginx-conf
+          - php8.3-fpm
+          - zabbix-agent
+        state: present
+        update_cache: true
+        
+    - name: Configure HA node settings
+      blockinfile:
+        path: /etc/zabbix/zabbix_server.conf
+        marker: "# {mark} ANSIBLE ZABBIX HA and DB CONFIG"
+        block: |
+          DBHost={{ hostvars['zabbix-db'].fixed_ip }}
+          DBPassword={{ ZBX_DB_PASSWORD }}
+          HANodeName={{ inventory_hostname }}
+          NodeAddress={{ ansible_host }}
+
+    - name: Enable Zabbix server
+      systemd:
+        name: zabbix-server
+        enabled: true
+        state: started
+        
+    - name: Install keepalived
+      apt:
+        name: keepalived
+        state: present
+        update_cache: true   
+        
+    - name: Deploy keepalived config
+      template:
+        src:  ../templates/keepalived.conf.j2
+        dest: /etc/keepalived/keepalived.conf
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Restart keepalived
+        
+    - name: Enable and start keepalived
+      systemd:
+        name: keepalived
+        enabled: true
+        state: started
+
+    - name: Deploy Zabbix nginx config
+      template:
+        src: ../templates/nginx.conf.j2
+        dest: /etc/zabbix/nginx.conf
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Restart nginx
+
+    - name: Set fastcgi socket
+      lineinfile:
+        path: /etc/zabbix/nginx.conf
+        regexp: 'fastcgi_pass'
+        line: '        fastcgi_pass unix:/run/php/php8.3-fpm.sock;'
+
+    - name: Disable default nginx site
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+
+    - name: Enable services
+      systemd:
+        name: "{{ item }}"
+        enabled: true
+      loop:
+        - nginx
+        - php8.3-fpm
+        
+    - name: Start services
+      systemd:
+        name: "{{ item }}"
+        state: started
+      loop:
+        - php8.3-fpm
+        - nginx
+      notify:
+        - Restart keepalived
+            
+    - name: Configure Zabbix frontend PHP config
+      template:
+        src: ../templates/nginx_web.j2
+        dest: /etc/zabbix/web/zabbix.conf.php
+        owner: root
+        group: root
+        mode: '0644'
+      notify:
+        - Restart zabbix-server
+        - Restart nginx
+        - Restart php-fpm
+    
+    - name: Deploy Zabbix agent config
+      template:
+        src: ../templates/zabbix_agentd.conf.j2
+        dest: /etc/zabbix/zabbix_agentd.conf
+        owner: root
+        group: root
+        mode: '0644'
+      notify:
+        - Enable and start zabbix-agent
+    
+#################################################
+# HANDLERS Zabbix-Two
+################################################# 
+  handlers:
+  
+    - name: Restart MariaDB
+      systemd:
+        name: mariadb
+        state: restarted
+        
+    - name: Restart keepalived
+      systemd:
+        name: keepalived
+        state: restarted
+        
+    - name: Restart nginx
+      systemd:
+        name: nginx
+        state: restarted
+        
+    - name: Restart php-fpm
+      systemd:
+        name: php8.3-fpm
+        state: restarted
+        
+    - name: Restart zabbix-server
+      systemd:
+        name: zabbix-server
+        state: restarted
+        
+    - name:  Enable and start zabbix-agent
+      systemd:
+        name: zabbix-agent
+        enabled: true
+        state: started
+        
