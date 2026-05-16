@@ -1,0 +1,27 @@
+zabbix_db_host: "{{ hostvars['zabbix-db'].fixed_ip }}"
+keepalived_virtual_ip: "10.0.1.29/27"
+keepalived_password: "password"
+keepalived_interface: "ens3"
+keepalived_peers: >-
+  {{
+    groups['Zabbix']
+    | reject('equalto', 'zabbix-db')
+    | reject('equalto', inventory_hostname)
+    | map('extract', hostvars, 'ansible_host')
+    | list
+  }}
+ 
+nginx_port: 80
+nginx_server_name: "{{ keepalived_virtual_ip | default(ansible_host) }}"
+nginx_sock: fastcgi_pass unix:/run/php/php8.3-fpm.sock
+
+ZBX_DB_HOST: "{{ hostvars['zabbix-db'].fixed_ip }}"
+ZBX_DB_PASSWORD: "password"
+ZBX_DATABASE_PORT: "3306"
+
+ZBX_SERVER: "localhost"
+ZBX_SERVER_PORT: "10051"
+ZBX_SERVER_NAME: "Zabbix"
+
+
+zabbix_server_ip: "{{ hostvars['zabbix-one'].fixed_ip }}"

@@ -1,0 +1,21 @@
+- hosts: all
+  become: true
+  roles:
+    - common
+
+- hosts: zabbix-db
+  become: true
+  roles:
+    - mariadb
+
+- hosts: zabbix-one
+  become: true
+  roles:
+    - zabbix_server
+    - keepalived
+
+- hosts: zabbix-two
+  become: true
+  roles:
+    - zabbix_server
+    - keepalived
