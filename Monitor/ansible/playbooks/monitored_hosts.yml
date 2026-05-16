@@ -1,0 +1,6 @@
+---
+- name: Configure monitored Linux hosts
+  hosts: monitored_linux
+  become: true
+  roles:
+    - zabbix-agent
