@@ -1,0 +1,18 @@
+---
+PRIMA_SUBNET_CIDR: 10.0.1.0/24
+PRIMA_GATEWAY_IP: 10.0.1.10
+PRIMA_ROUTER_INT_IP: 10.0.1.20
+
+zabbix_nodes:
+  - name: zNode1
+    ip: 10.8.50.67
+    user: ubuntu
+  - name: zNode2
+    ip: 10.8.50.72
+    user: ubuntu
+  - name: zNode3
+    ip: 10.8.50.88
+    user: debian
+  - name: zNode4
+    ip: 10.8.50.63
+    user: fedora

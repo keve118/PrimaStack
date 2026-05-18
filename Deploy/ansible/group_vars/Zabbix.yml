@@ -1,3 +1,5 @@
+---
+
 zabbix_db_host: "{{ hostvars['zabbix-db'].fixed_ip }}"
 keepalived_virtual_ip: "10.0.1.29/27"
 keepalived_password: "password"
@@ -11,6 +13,8 @@ keepalived_peers: >-
     | list
   }}
  
+ 
+ 
 nginx_port: 80
 nginx_server_name: "{{ keepalived_virtual_ip | default(ansible_host) }}"
 nginx_sock: fastcgi_pass unix:/run/php/php8.3-fpm.sock
@@ -23,5 +27,26 @@ ZBX_SERVER: "localhost"
 ZBX_SERVER_PORT: "10051"
 ZBX_SERVER_NAME: "Zabbix"
 
-
 zabbix_server_ip: "{{ hostvars['zabbix-one'].fixed_ip }}"
+
+zabbix_nodes:
+  - name: zNode1
+    ip: 10.8.50.67
+    os: ubuntu
+    user: ubuntu
+    
+  - name: zNode2
+    ip: 10.8.50.72
+    os: ubuntu
+    user: ubuntu
+    
+  - name: zNode3
+    ip: 10.8.50.88
+    os: debian
+    user: debian
+    
+  - name: zNode4
+    ip: 10.8.50.63
+    os: fedora
+    user: fedora
+

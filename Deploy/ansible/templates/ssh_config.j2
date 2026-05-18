@@ -1,0 +1,13 @@
+Host ansible-center
+  HostName {{ ansible_center.floating_ip }}
+  User ubuntu
+  IdentityFile ~/.ssh/ansible
+
+{% for host in worker_hosts %}
+Host {{ host.name | lower }}
+  HostName {{ host.ip }}
+  User ubuntu
+  ProxyJump ansible-center
+  IdentityFile ~/.ssh/ansible
+
+{% endfor %}

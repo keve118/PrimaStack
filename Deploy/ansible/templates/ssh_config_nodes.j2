@@ -1,0 +1,7 @@
+{% for node in zabbix_nodes %}
+Host {{ node.name | lower }}
+  HostName {{ node.ip }}
+  User {{ node.user }}
+  IdentityFile ~/.ssh/ansible
+
+{% endfor %}

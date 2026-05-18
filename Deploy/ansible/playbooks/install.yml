@@ -1,5 +1,6 @@
 - hosts: localhost
   tasks:
+  
     #################################################
     # CLEANUP / FRESH START
     #################################################
@@ -65,6 +66,24 @@
         interfaces:
           - PRIMA-SUB
       ignore_errors: true
+      
+    - name: Remove router
+      openstack.cloud.router:
+        state: absent
+        name: PRIMA-ROUTER 
+      ignore_errors: true
+      
+    - name: Remove router
+      openstack.cloud.router:
+        state: absent
+        name: PRIMA-ROUTER-INT
+      ignore_errors: true
+
+    - name: Remove router
+      openstack.cloud.router:
+        state: absent
+        name: PRIMA-ROUTER-EXT
+      ignore_errors: true
 
     - name: Wait for router cleanup propagation
       pause:
@@ -73,7 +92,7 @@
     - name: Remove router
       openstack.cloud.router:
         state: absent
-        name: PRIMA-ROUTER
+        name: PRIMA-ROUTER 
       ignore_errors: true
 
     - name: Remove subnet
@@ -82,10 +101,34 @@
         name: PRIMA-SUB
       ignore_errors: true
 
+    - name: Remove subnet
+      openstack.cloud.subnet:
+        state: absent
+        name: PRIMA-SUB
+      ignore_errors: true
+
+    - name: Remove subnet
+      openstack.cloud.subnet:
+        state: absent
+        name: PRIMA-SUB-INT
+      ignore_errors: true
+
+    - name: Remove subnet
+      openstack.cloud.subnet:
+        state: absent
+        name: PRIMA-SUB-EXT
+      ignore_errors: true
+
     - name: Remove network
       openstack.cloud.network:
         state: absent
-        name: PRIMA-NET
+        name: PRIMA-NET-INTERNAL
+      ignore_errors: true
+
+    - name: Remove network
+      openstack.cloud.network:
+        state: absent
+        name: PRIMA-NET-EXTERNAL
       ignore_errors: true
 
     - name: Remove security group
@@ -120,26 +163,33 @@
         state: present
         network_name: PRIMA-NET
         name: PRIMA-SUB
-        
         ip_version: 4
-        cidr: 10.0.1.0/27
+        cidr: "{{ PRIMA_SUBNET_CIDR }}"
         enable_dhcp: true
+        gateway_ip: "{{ PRIMA_GATEWAY_IP }}"
         dns_nameservers:
           - 8.8.8.8
-          
-    - name: Create router
+    
+    - name: Create EXT router (gateway -> External)
       openstack.cloud.router:
         state: present
-        name: PRIMA-ROUTER
-        network: External
-        
-    - name: Attach subnet to router
-      openstack.cloud.router:
-        state: present
-        name: PRIMA-ROUTER
+        name: PRIMA-ROUTER-EXT
+        network: External          
         interfaces:
-          - PRIMA-SUB
-         
+          - net: PRIMA-NET 
+            subnet: PRIMA-SUB
+            portip: "{{ PRIMA_GATEWAY_IP }}"
+
+    - name: Create INT router (Gateway -> Internal)
+      openstack.cloud.router:
+        state: present
+        name: PRIMA-ROUTER-INT
+        network: Internal          
+        interfaces:
+          - net: PRIMA-NET 
+            subnet: PRIMA-SUB
+            portip: "{{ PRIMA_ROUTER_INT_IP }}"
+            
     - name: Create security group
       openstack.cloud.security_group:
         state: present
@@ -166,29 +216,23 @@
         security_group: PRIMA-SG
         protocol: icmp
         remote_group: PRIMA-SG   
-
-    - name: Generate SSH key locally
-      openssh_keypair:
-        path: ./PRIMA-KEY
-        type: rsa
-        size: 4096
   
     - name: Upload keypair to OpenStack
       openstack.cloud.keypair:
         state: present
         name: PRIMA-KEY
-        public_key_file: ./PRIMA-KEY.pub
+        public_key_file:  "{{ playbook_dir }}/PUBLIC_KEYS/ansible.pub"
       
     - name: Install SSH private key
       copy:
-        src: "{{ playbook_dir }}/PRIMA-KEY"
+        src: "{{ playbook_dir }}/PRIVATE_KEYS/ansible.pem"
         dest: "{{ lookup('env','HOME') }}/.ssh/ansible"
         mode: '0600'
       delegate_to: localhost
  
     - name: Install SSH public key
       copy:
-        src: "{{ playbook_dir }}/PRIMA-KEY.pub"
+        src:  "{{ playbook_dir }}/PUBLIC_KEYS/ansible.pub"
         dest: "{{ lookup('env','HOME') }}/.ssh/ansible.pub"
         mode: '0600'
       delegate_to: localhost 
@@ -259,7 +303,6 @@
           'access_ip': floating_ip | default(vm_ip)
         }] }}"
          
-   
     - name: Create VM DB
       openstack.cloud.server:
         state: present
@@ -348,39 +391,18 @@
             | first
           }}
  
-    - name: Build inventory content
-      set_fact:
-        inventory_content: |
-          [localhost]
-          localhost ansible_connection=local
-
-          [Zabbix]
-          {% for host in zabbix_hosts if host.name != 'ansible-center' %}
-          {{ host.name }} ansible_host={{ host.access_ip }} fixed_ip={{ host.ip }}
-          {% endfor %}
-          
-          [Zabbix:vars]
-          ansible_user=ubuntu
-          ansible_ssh_private_key_file=~/.ssh/ansible
-          ansible_ssh_common_args='-o ProxyJump=ubuntu@{{ ansible_center_floating_ip }} -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null'
-          
-          [ansible_center]
-          {% for host in zabbix_hosts if host.name == 'ansible-center' %}
-          {{ host.name }} ansible_host={{ host.access_ip }} fixed_ip={{ host.ip }}{% if host.floating_ip %} floating_ip={{ host.floating_ip }}{% endif %} ansible_user=ubuntu
-          {% endfor %}
-          
-          [all:vars]
-          ansible_ssh_common_args='-o StrictHostKeyChecking=accept-new'
-  
-    - name: Write inventory.ini safely
-      copy:
+    - name: Write inventory.ini
+      template:
+        src: ../templates/inventory.ini.j2
         dest: "{{ playbook_dir }}/../inventory.ini"
-        content: "{{ inventory_content }}"
+        mode: '0600'
         force: true
         
     #################################################
     # Create SSH Config
     #################################################  
+    
+    #Hosts
     - name: Find ansible-center
       set_fact:
         ansible_center: "{{ (zabbix_hosts | selectattr('name','equalto','ansible-center') | first) }}"
@@ -389,21 +411,16 @@
       set_fact:
         worker_hosts: "{{ zabbix_hosts | rejectattr('name','equalto','ansible-center') | list }}"    
 
-    - name: Generate SSH config
-      copy:
-        dest: "{{ playbook_dir }}/../ssh_config_copy"
+    - name: Generate SSH config (Hosts)
+      template:
+        src:  ../templates/ssh_config.j2
+        dest: "{{ playbook_dir }}/../ssh_config"
         mode: '0600'
-        content: |
-          Host ansible-center
-            HostName {{ ansible_center.floating_ip }}
-            User ubuntu
-            IdentityFile ~/.ssh/ansible
+        
+    #Nodes
+    - name: Generate SSH config (Nodes)
+      template:
+        src:  ../templates/ssh_config_nodes.j2
+        dest: "{{ playbook_dir }}/../ssh_config_nodes"
+        mode: '0600'
 
-          {% for host in worker_hosts %}
-          Host {{ host.name | lower }}
-            HostName {{ host.ip }}
-            User ubuntu
-            ProxyJump ansible-center
-            IdentityFile ~/.ssh/ansible
-            
-          {% endfor %}

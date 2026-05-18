@@ -1,0 +1,21 @@
+[localhost]
+localhost ansible_connection=local
+
+[Zabbix]
+{% for host in zabbix_hosts if host.name != 'ansible-center' %}
+{{ host.name }} ansible_host={{ host.access_ip }} fixed_ip={{ host.ip }}
+{% endfor %}
+
+[Zabbix:vars]
+ansible_user=ubuntu
+ansible_ssh_private_key_file=~/.ssh/ansible
+ansible_ssh_common_args='-o ProxyJump=ubuntu@{{ ansible_center_floating_ip }} -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null'
+
+[ansible_center]
+{% for host in zabbix_hosts if host.name == 'ansible-center' %}
+{{ host.name }} ansible_host={{ host.access_ip }} fixed_ip={{ host.ip }}{% if host.floating_ip %} floating_ip={{ host.floating_ip }}{% endif %} ansible_user=ubuntu
+{% endfor %}
+
+[all:vars]
+ansible_ssh_common_args='-o StrictHostKeyChecking=accept-new'
+

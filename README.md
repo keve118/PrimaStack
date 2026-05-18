@@ -27,7 +27,7 @@ The instructions below will Install the Network/Subnet/KeyPair/SecurityGroup/Flo
 
 #### 2. Give permission and install
 
-This does essentially the same as the manual installation guide below, but without doing all things manually.
+This does essentially the same as the manual installation guide below, but without doing everything manually.
 
 ***COMMAND:***  chmod +x install.sh
 
@@ -39,7 +39,7 @@ See section "TEST ZABBIX"
 
 ### Manual INSTALL 
 
-#### 1. Download the openrc.sh from OpenStack, and put it in the "Deploy" folder. 
+#### 1. Download the openrc.sh from OpenStack, and put it in the main repository folder. 
 
 #### 2. Activate the OpenStack environment from the Deploy folder by the terminal
 
@@ -51,13 +51,14 @@ See section "TEST ZABBIX"
 
 From Deploy folder:
 
-***COMMAND:*** ansible-playbook -i ansible/inventory.ini ansible/playbooks/install.yml
+***COMMAND:*** ansible-playbook -i Deploy/ansible/inventory.ini Deploy/ansible/playbooks/install.yml
+
  
 #### 4. Setup Zabbix on OpenStack resources
 
 From Deploy folder:
 
-***COMMAND:*** ansible-playbook -i ansible/inventory.ini ansible/playbooks/configure.yml
+***COMMAND:*** ansible-playbook -i Deploy/ansible/inventory.ini Deploy/ansible/playbooks/configure.yml
  
 ### TEST ZABBIX:
 
